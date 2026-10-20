@@ -149,6 +149,38 @@ func TestExecuteNeverForwardsTheClientCredential(t *testing.T) {
 	}
 }
 
+func TestExecuteDropsHopByHopHeaders(t *testing.T) {
+	// An edge proxy can hand us Connection: upgrade; forwarding it makes Go's
+	// HTTP/2 client refuse the request ("invalid Connection request header").
+	bridge := &fakeBridge{doResponse: pluginapi.HTTPResponse{StatusCode: 200, Body: []byte(`{}`)}}
+	plugin := newManagementPlugin(t, bridge)
+
+	req := executeRequest(Provider+"/deepseek-v4-pro", `{"model":"x"}`, formatResponses)
+	req.Headers = http.Header{
+		"Connection":        {"upgrade"},
+		"Upgrade":           {"websocket"},
+		"Keep-Alive":        {"timeout=5"},
+		"Proxy-Connection":  {"keep-alive"},
+		"Te":                {"trailers"},
+		"Trailer":           {"X-Checksum"},
+		"Transfer-Encoding": {"chunked"},
+		"X-Trace":           {"keep-me"},
+	}
+
+	if _, err := plugin.Execute(context.Background(), req); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	sent := bridge.requests[0].Headers
+	for _, name := range []string{"Connection", "Upgrade", "Keep-Alive", "Proxy-Connection", "Te", "Trailer", "Transfer-Encoding"} {
+		if got := sent.Values(name); len(got) != 0 {
+			t.Errorf("%s = %q, want hop-by-hop headers dropped", name, got)
+		}
+	}
+	if got := sent.Get("X-Trace"); got != "keep-me" {
+		t.Errorf("X-Trace = %q, want end-to-end headers forwarded", got)
+	}
+}
+
 func TestExecutePassesUpstreamStatusThrough(t *testing.T) {
 	const body = `{"error":{"message":"rate limited","type":"rate_limit"}}`
 	bridge := &fakeBridge{doResponse: pluginapi.HTTPResponse{StatusCode: 429, Body: []byte(body)}}

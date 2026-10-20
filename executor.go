@@ -27,13 +27,25 @@ const (
 )
 
 // headersNeverForwarded carry the client's own proxy credential, so forwarding
-// them would hand our caller's key to DeepSeek or corrupt the request framing.
+// them would hand our caller's key to DeepSeek or corrupt the request framing,
+// plus the RFC 7230 hop-by-hop headers. An edge proxy in front of the host can
+// hand us "Connection: upgrade"; forwarding it makes Go's HTTP/2 client reject
+// the whole request before it leaves the process.
 var headersNeverForwarded = map[string]struct{}{
-	"Authorization":   {},
-	"X-Api-Key":       {},
-	"Host":            {},
-	"Content-Length":  {},
-	"Accept-Encoding": {},
+	"Authorization":       {},
+	"X-Api-Key":           {},
+	"Host":                {},
+	"Content-Length":      {},
+	"Accept-Encoding":     {},
+	"Connection":          {},
+	"Keep-Alive":          {},
+	"Proxy-Authenticate":  {},
+	"Proxy-Authorization": {},
+	"Proxy-Connection":    {},
+	"Te":                  {},
+	"Trailer":             {},
+	"Transfer-Encoding":   {},
+	"Upgrade":             {},
 }
 
 // upstreamCall is everything a request needs before it goes to DeepSeek: which

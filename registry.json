@@ -6,7 +6,7 @@
       "name": "DeepSeek CLIProxyAPI Provider",
       "description": "DeepSeek provider for CLIProxyAPI with protocol-aligned passthrough: anthropic, chat-completions and responses requests are forwarded to the matching DeepSeek endpoint without cross-protocol translation, so reasoning history and tool calls survive untouched. Credentials live in the host, usage records are logged, keys are managed through the host Management API.",
       "author": "xspeed1989",
-      "version": "0.4.4",
+      "version": "0.4.5",
       "repository": "https://github.com/xspeed1989/cpa-plugin-deepseek",
       "homepage": "https://github.com/xspeed1989/cpa-plugin-deepseek",
       "license": "MIT",
