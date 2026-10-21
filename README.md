@@ -8,7 +8,7 @@ CLIProxyAPI 的 DeepSeek 原生插件。客户端用它自己的协议访问，�
 
 内置的 `openai-compatibility` 通道能跑 DeepSeek，但走的是「客户端协议 → 内部表示 → 上游协议」的转换路径。DeepSeek 有三个协议面，各自的 thinking 字段和分帧规则都不同，任何中间层丢字段都会让会话从「降级」变成「中断」。
 
-本插件只做三件事：判定协议面 → 选对应端点 → 改写模型名。其余字节原样转发。详见 [ADR-0001](docs/adr/0001-protocol-aligned-passthrough.md)。
+本插件只做三件事：判定协议面 → 选对应端点 → 改写模型名。其余字节原样转发；唯一例外是历史工具调用缺少可回放 thinking 时的发送前转述（见 [ADR-0006](docs/adr/0006-narrate-unreplayable-tool-history.md)）。详见 [ADR-0001](docs/adr/0001-protocol-aligned-passthrough.md)。
 
 | 客户端协议 | 上游端点 |
 |---|---|
@@ -124,6 +124,7 @@ request usage {"model":"deepseek-cpa/deepseek-v4-pro","response_model":"deepseek
 
 - **只支持 DeepSeek 官方端点**。第三方中转或逆向上游不在范围内。
 - **模型列表严格照上游**：上游不公布但实际可用的名字（例如 `deepseek-v4-pro[1m]`）在探测成功后不可用，因为宿主只路由已注册的模型。这是刻意取舍，见 [spec](docs/spec/0001-deepseek-cpa-plugin.md) 的模型公布段落。
+- **历史工具调用缺 thinking 时会被转述**：切模型后历史里可能带着别的模型的工具调用。`responses` 面会把缺可回放 `reasoning_text` 的调用与结果改写成带历史标注的普通 assistant/user 消息；`chat-completions` 面只给缺字段的 assistant 消息补空 `reasoning_content`。不伪造 thinking、不关闭 thinking；原生但缺 reasoning 的调用也可能被这样处理。见 [ADR-0006](docs/adr/0006-narrate-unreplayable-tool-history.md)。
 - **不实现 `thinking_applier`**：宿主的 applier 查找键是协议格式名，插件按 `thinking.identifier` 注册，两者永不相等，该能力面不可达。客户端的 thinking 参数靠透传生效。见 [ADR-0004](docs/adr/0004-no-thinking-applier.md)。
 - **用量日志没有协议面**：宿主的用量记录没有格式字段，且其 `request_id` 与执行请求不相关，无法反查。
 - **运行中新增凭证不会立刻刷新模型列表**：宿主只在插件重载时询问模型。
@@ -160,5 +161,5 @@ CI 在原生 runner 上分别构建（FreeBSD 在 VM 内构建），汇总 `chec
 ## 文档
 
 - [CONTEXT.md](CONTEXT.md) —— 术语表
-- [docs/adr/](docs/adr/) —— 四个架构决策
+- [docs/adr/](docs/adr/) —— 架构决策（ADR-0001…0006）
 - [docs/spec/0001-deepseek-cpa-plugin.md](docs/spec/0001-deepseek-cpa-plugin.md) —— 完整规格

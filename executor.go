@@ -57,8 +57,9 @@ type upstreamCall struct {
 	body     []byte
 }
 
-// prepareCall resolves the endpoint, rewrites the model name, and attaches the
-// host-managed credential. Both the streaming and non-streaming paths share it.
+// prepareCall resolves the endpoint, rewrites the model name, applies the
+// tool-history fallback from ADR-0006, and attaches the host-managed
+// credential. Both the streaming and non-streaming paths share it.
 func (p *Plugin) prepareCall(req pluginapi.ExecutorRequest) (upstreamCall, error) {
 	endpoint, err := endpointForFormat(req.SourceFormat)
 	if err != nil {
@@ -76,6 +77,10 @@ func (p *Plugin) prepareCall(req pluginapi.ExecutorRequest) (upstreamCall, error
 	if err != nil {
 		return upstreamCall{}, fmt.Errorf("executor: rewrite model: %w", err)
 	}
+	body, err = repairToolHistory(strings.TrimSpace(req.SourceFormat), body)
+	if err != nil {
+		return upstreamCall{}, err
+	}
 
 	headers := forwardedHeaders(req.Headers)
 	headers.Set("Authorization", "Bearer "+apiKey)
@@ -90,7 +95,8 @@ func (p *Plugin) prepareCall(req pluginapi.ExecutorRequest) (upstreamCall, error
 
 // Execute forwards one non-streaming request to the DeepSeek endpoint for the
 // client's protocol surface. The body goes upstream unchanged except for the
-// model name; DeepSeek is stateless across all three surfaces.
+// model name and the ADR-0006 tool-history fallback; DeepSeek is stateless
+// across all three surfaces.
 func (p *Plugin) Execute(ctx context.Context, req pluginapi.ExecutorRequest) (pluginapi.ExecutorResponse, error) {
 	call, err := p.prepareCall(req)
 	if err != nil {

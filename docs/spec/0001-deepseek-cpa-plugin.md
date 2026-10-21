@@ -4,7 +4,7 @@
 
 部署者在用 CLIProxyAPI 代理 DeepSeek 时撞到三类问题。
 
-**第一类是会话直接不可用。** DeepSeek 的 thinking 模型在带 `tools` 的请求里要求历史所有轮的 `reasoning_content` 原样回传，漏一轮就返回 400。内置 `openai-compatibility` 通道走的是「客户端协议 → 内部表示 → 上游协议」的转换路径，任何中间层丢字段都会把这个约束从「降级」变成「中断」。Claude Code 这类 Anthropic 客户端尤其严重：它自己的协议里 reasoning 块和工具调用是绑在一起的，转换一次就可能错位。
+**第一类是会话直接不可用。** DeepSeek 的 thinking 模型在带 `tools` 的请求里要求历史工具调用带上可回放的 reasoning；对上游不认识的调用（例如切模型后留下的其他模型的调用），缺少可回放内容就返回 400。内置 `openai-compatibility` 通道走的是「客户端协议 → 内部表示 → 上游协议」的转换路径，任何中间层丢字段都会把这个约束从「降级」变成「中断」。Claude Code 这类 Anthropic 客户端尤其严重：它自己的协议里 reasoning 块和工具调用是绑在一起的，转换一次就可能错位。
 
 **第二类是三套协议的 thinking 参数互不相通。** DeepSeek 在 `chat-completions` 用 `thinking.type` 加 `reasoning_effort`，在 `anthropic` 用 `reasoning.effort` 加 `output_config.effort`，在 `responses` 用 `reasoning.effort`。内置通道不认这些差异，客户端只能自己猜哪个字段会生效。
 
@@ -14,7 +14,7 @@
 
 一个 CLIProxyAPI 原生插件，标识 `deepseek-cpa`。
 
-客户端按自己习惯的协议访问，用 `deepseek-cpa/<上游模型名>` 指名要这个插件。插件把**原始客户端 body** 送进 DeepSeek 的同协议端点——`chat-completions` 与 `responses` 打到 `https://api.deepseek.com`，`anthropic` 打到 `https://api.deepseek.com/anthropic`——只在模型名上改写。协议之间不转换，所以 reasoning 回放这条约束由客户端和上游自己保证，插件不制造新的丢字段机会。
+客户端按自己习惯的协议访问，用 `deepseek-cpa/<上游模型名>` 指名要这个插件。插件把**原始客户端 body** 送进 DeepSeek 的同协议端点——`chat-completions` 与 `responses` 打到 `https://api.deepseek.com`，`anthropic` 打到 `https://api.deepseek.com/anthropic`——只在模型名上改写。唯一例外是 ADR-0006 的受限历史转述：当带工具的历史里某个调用没有可回放的 reasoning 时，把该调用与结果改写成带历史标注的普通消息，或给 chat 的 assistant 消息补一个空 `reasoning_content`；不伪造 reasoning、不关闭 thinking。协议之间不转换。
 
 凭证交给宿主：插件声明凭证解析能力，管理页通过宿主的凭证写入回调增删 key，轮转、限流、用量记账都由宿主完成。插件不复制一份密钥池。
 
@@ -48,7 +48,7 @@ thinking 参数由客户端按它所用协议的字段写入，插件原样透�
 22. 作为部署者，我想要每个请求的用量被记成结构化日志，这样我能自己接统计而不用插件内置一个看板。
 23. 作为部署者，我想要插件声明的能力面就是它真的实现的那些，这样我读代码时不会撞到恒等函数的空壳。
 24. 作为维护者，我想要三套协议的差异集中在一处判定，这样新增第四套协议时我知道该动哪里。
-25. 作为维护者，我想要上游收到的字节与客户端原始 body 逐字节一致（除模型名），这样任何字段丢失都能被测试抓住。
+25. 作为维护者，我想要上游收到的字节与客户端原始 body 逐字节一致（除模型名与 ADR-0006 的受限历史转述外），这样任何字段丢失都能被测试抓住。
 26. 作为维护者，我想要能力面的逻辑在 Go 层可直接测试，不经过 cgo 与 JSON envelope，这样大多数测试跑得快。
 27. 作为维护者，我想要 ABI 握手有一层薄冒烟测试，这样 cgo 导出符号断掉时我能立刻知道。
 28. 作为维护者，我想要依赖版本钉死到具体的 CLIProxyAPI 版本，这样上游改格式 token 或 schema 版本时我是被编译期或启动期拦住，而不是静默接不到请求。
@@ -59,7 +59,7 @@ thinking 参数由客户端按它所用协议的字段写入，插件原样透�
 
 **插件标识与命名空间。** 插件 ID 为 `deepseek-cpa`，与动态库文件名、`plugins.configs.deepseek-cpa` 配置键、模型命名空间前缀三者一致。客户端模型名必须是 `deepseek-cpa/<上游模型名>`；裁掉前缀后的部分原样作为上游模型名，包括 `[1m]` 这类后缀。不带前缀的模型名一律不由本插件处理，交回宿主的正常路径。
 
-**协议面对齐。** 插件声明 `executor` 且同时声明三个协议的输入与输出格式：`chat-completions`、`responses`、`anthropic`。出站端点由入站协议决定，无额外配置项。这是 ADR-0001 的结论。
+**协议面对齐。** 插件声明 `executor` 且同时声明三个协议的输入与输出格式：`chat-completions`、`responses`、`anthropic`。出站端点由入站协议决定，无额外配置项。这是 ADR-0001 的结论。发送前唯一允许的重写是 ADR-0006 的受限历史转述，它只按可观察结构触发，不识别来源模型。
 
 **不声明恒等能力面。** `request_translator`、`response_translator`、`request_normalizer`、`response_normalizer`、`request_interceptor`、`response_interceptor`、`response_stream_interceptor`、`model_router`、`command_line_plugin` 全部不声明。声明五个真实能力面：`auth_provider`、`model_provider`、`executor`、`usage_plugin`、`management_api`。
 
@@ -97,7 +97,7 @@ thinking 参数由客户端按它所用协议的字段写入，插件原样透�
 
 **缝 A（主缝）。** 在 Go 层通过插件构建入口拿到能力面接口，用 Go 结构体直接调用各方法。绝大多数测试落在这里：模型前缀裁切、协议到端点的映射、thinking 字段原样透传、错误状态码透传、流式终态错误事件、用量记录形状、能力面声明。
 
-**缝 B（传输边界）。** 插件对上层的 HTTP 与凭证写入调用集中在一个窄接口后面，测试注入假实现并记录插件交给宿主的 `HTTPRequest`。假上游落在这一层而不是真起 HTTP server：它比 server 更靠近契约，且 URL 是编译期常量。这里断言两类契约：非流式请求的上游 body 与客户端原始 body 除模型名外逐字节一致；流式响应的帧序列逐条、逐字节与上游返回一致。三个协议面在这里用表驱动覆盖，不为每个协议单开一条测试路径。
+**缝 B（传输边界）。** 插件对上层的 HTTP 与凭证写入调用集中在一个窄接口后面，测试注入假实现并记录插件交给宿主的 `HTTPRequest`。假上游落在这一层而不是真起 HTTP server：它比 server 更靠近契约，且 URL 是编译期常量。这里断言两类契约：非流式请求的上游 body 与客户端原始 body 除模型名（以及 ADR-0006 明确命中的局部替换）外逐字节一致；流式响应的帧序列逐条、逐字节与上游返回一致。历史转述另需断言未命中的 item/顶层字节不变、改写结果确定且幂等。三个协议面在这里用表驱动覆盖，不为每个协议单开一条测试路径。
 
 **缝 C（薄层冒烟）。** 一到两个测试覆盖动态库初始化入口、envelope 的 `ok` / `error` 编解码、注册响应里的能力面声明字段。只验证握手没断，不重复 A、B 的断言。
 
@@ -113,6 +113,7 @@ thinking 参数由客户端按它所用协议的字段写入，插件原样透�
 - 第三方中转或逆向上游。只支持 DeepSeek 官方端点。
 - 裸 `deepseek-*` 模型名的接管。
 - 温度、`presence_penalty`、`frequency_penalty` 在 thinking 模式下的清理或归一化。上游本来就静默忽略，插件不改写客户端可见行为。
+- 伪造 reasoning、关闭 thinking、按模型来源分流历史。ADR-0006 的转述只按可观察结构触发，不识别来源模型。
 - 插件商店发布所需的打包与发布流水线（可在实现阶段作为独立工单处理）。
 
 ## Further Notes
@@ -122,5 +123,7 @@ thinking 参数由客户端按它所用协议的字段写入，插件原样透�
 1. 静态模型路径下宿主是否仍会选中凭证记录。`model_router` 文档中「不选凭证」的表述只对 router-self 路由成立，normal 路径未经证实。若不选，`model.static` 与 `executor_model_scope: static` 的组合需改为凭证绑定模型。
 2. 当前钉住的 CLIProxyAPI 版本的格式匹配器是否接受旧 token。这决定 `cpa-plugin-commandcode` 的常量能否作为参考。
 3. schema 版本该声明几。从 3 起 payload 流分块不再携带原始请求体，本插件逐 event 原样上交，理论上应声明最高版本，但需确认宿主对高版本的兼容承诺。
+
+**部署前验证。** ADR-0006 的转述发生在宿主把 `Payload` 交给执行器之后；宿主对 websocket 历史合并、`previous_response_id` 移除的全路径未在已部署版本上逐一验证。部署前需用合成请求做真实续轮 smoke。
 
 **仓库状态。** 当前目录此前不是 git 仓库，spec 发布前需先初始化并关联远端仓库。
