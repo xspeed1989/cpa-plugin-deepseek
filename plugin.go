@@ -14,7 +14,7 @@ import (
 )
 
 // pluginVersion is the release version reported at registration.
-var pluginVersion = "0.4.5"
+var pluginVersion = "0.4.7"
 
 // Version returns the plugin release version reported to the host.
 func Version() string { return pluginVersion }
