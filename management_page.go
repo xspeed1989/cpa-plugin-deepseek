@@ -47,7 +47,7 @@ const keysPage = `<!doctype html>
 
 <section id="mgmt-section">
   <h2>管理密钥</h2>
-  <p class="hint" id="mgmt-note" style="margin:0 0 10px">CLIProxyAPI 管理密钥。面板登录时勾选过「记住密码」的话，这里会自动读取，无需再填。</p>
+  <p class="hint" id="mgmt-note" style="margin:0 0 10px">CLIProxyAPI 管理密钥。同源面板登录时勾选过「记住密码」的话，这里会自动读取，无需再填。</p>
   <div class="row" id="mgmt-form">
     <div>
       <label for="mgmt">管理密钥</label>
@@ -92,23 +92,24 @@ const keysPage = `<!doctype html>
     status.className = kind || "";
   }
 
-  // The management panel stores the key under localStorage["managementKey"],
-  // obfuscated as "enc::v1::" + base64(XOR(utf8(JSON), key)) where key is derived
-  // from the page host, the user agent and a fixed salt. Reading it here means a
-  // user who ticked "remember password" in the panel never retypes it.
-  var PANEL_STORE_KEY = "managementKey";
+  // The management panel persists its auth store under localStorage["cli-proxy-auth"]
+  // as a zustand record {state, version}, obfuscated as "enc::v1::" +
+  // base64(XOR(utf8(JSON), key)) where key is derived from the page host, the
+  // user agent and a fixed salt. Reading it here means a user who ticked
+  // "remember password" in the panel never retypes it.
+  //
+  // The standalone "managementKey" entry is the older panel layout, kept only as
+  // a migration fallback, and is read only when the current record is absent. An
+  // empty, corrupt, logged-out or foreign-server record must not resurrect a
+  // stale password.
+  var PANEL_AUTH_KEY = "cli-proxy-auth";
+  var LEGACY_PANEL_KEY = "managementKey";
   var OBFUSCATION_PREFIX = "enc::v1::";
   var OBFUSCATION_SALT = "cli-proxy-api-webui::secure-storage";
 
-  function panelManagementKey() {
-    var raw;
-    try {
-      raw = localStorage.getItem(PANEL_STORE_KEY);
-    } catch (e) {
-      return "";
-    }
+  function decodePanelRecord(raw) {
     if (!raw || raw.indexOf(OBFUSCATION_PREFIX) !== 0) {
-      return "";
+      return undefined;
     }
     try {
       var key = new TextEncoder().encode(
@@ -119,23 +120,76 @@ const keysPage = `<!doctype html>
       for (var i = 0; i < binary.length; i++) {
         bytes[i] = binary.charCodeAt(i) ^ key[i % key.length];
       }
-      var decoded = JSON.parse(new TextDecoder().decode(bytes));
-      if (typeof decoded !== "string") {
-        return "";
-      }
-      var value = decoded.trim();
-      // A mismatched host or user agent turns the tail into garbage that can
-      // still parse; only accept something shaped like a management key, because
-      // a wrong guess costs one of the host's five failed attempts.
-      if (!/^[\x21-\x7e]{4,256}$/.test(value)) {
-        return "";
-      }
-      return value;
+      return JSON.parse(new TextDecoder().decode(bytes));
     } catch (e) {
-      // A different panel version, a changed user agent, or a rotated key: fall
-      // back to asking instead of guessing.
+      // A different panel version, a changed user agent, or a rotated record: let
+      // the caller ask instead of guessing.
+      return undefined;
+    }
+  }
+
+  function normalizeManagementKey(value) {
+    if (typeof value !== "string") {
       return "";
     }
+    var trimmed = value.trim();
+    // A mismatched host or user agent turns the tail into garbage that can still
+    // parse; only accept something shaped like a management key, because a wrong
+    // guess costs one of the host's five failed attempts.
+    return /^[\x21-\x7e]{4,256}$/.test(trimmed) ? trimmed : "";
+  }
+
+  // The page calls /v0/management on its own origin at the root of the host, so
+  // only a panel apiBase naming that same root may supply the key. A base with a
+  // path prefix, credentials, query or fragment names a different destination
+  // and would send this page's requests somewhere the panel never logged into.
+  function isSamePanelBase(apiBase) {
+    if (typeof apiBase !== "string" || !apiBase.trim()) {
+      return false;
+    }
+    try {
+      var base = new URL(apiBase.trim());
+      if (base.origin !== window.location.origin) {
+        return false;
+      }
+      if (base.username || base.password || base.search || base.hash) {
+        return false;
+      }
+      return base.pathname.replace(/\/+$/, "") === "";
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function panelManagementKey() {
+    var raw;
+    try {
+      raw = localStorage.getItem(PANEL_AUTH_KEY);
+    } catch (e) {
+      return "";
+    }
+    if (raw != null) {
+      var auth = decodePanelRecord(raw);
+      if (!auth || typeof auth !== "object" || Array.isArray(auth)) {
+        return "";
+      }
+      var state = auth.state;
+      if (!state || typeof state !== "object" || Array.isArray(state)) {
+        return "";
+      }
+      if (state.rememberPassword !== true || !isSamePanelBase(state.apiBase)) {
+        return "";
+      }
+      return normalizeManagementKey(state.managementKey);
+    }
+
+    var legacy;
+    try {
+      legacy = localStorage.getItem(LEGACY_PANEL_KEY);
+    } catch (e) {
+      return "";
+    }
+    return normalizeManagementKey(decodePanelRecord(legacy));
   }
 
   function managementKey() {

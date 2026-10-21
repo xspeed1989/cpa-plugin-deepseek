@@ -29,7 +29,7 @@ CLIProxyAPI 的 DeepSeek 原生插件。客户端用它自己的协议访问，�
 
 ```bash
 # 以 linux/amd64 为例，其他平台把文件名里的平台段换掉即可
-version=0.3.0
+version=0.4.6
 curl -sL -O "https://github.com/xspeed1989/cpa-plugin-deepseek/releases/download/v${version}/deepseek-cpa_${version}_linux_amd64.zip"
 unzip -o "deepseek-cpa_${version}_linux_amd64.zip" -d <cliproxyapi>/plugins/
 ```
@@ -63,7 +63,9 @@ curl -s -H "X-Management-Key: <你的管理密钥>" \
 
 管理面板 → 插件 → **DeepSeek Keys**（`/v0/resource/plugins/deepseek-cpa/credentials`）。
 
-面板登录时勾选过「记住密码」的话，页面会自动读取并解码面板保存的那把管理密钥，不需要再填；否则才提示输入（只在本机浏览器保存一次）。之后可以直接查看、添加、删除密钥。
+面板登录时勾选过「记住密码」的话，页面会在同源且服务器一致时自动读取并解码面板保存的那把管理密钥，不需要再填；否则需要手动填一次（只在本机浏览器保存）。之后可以直接查看、添加、删除密钥。
+
+自动复用只发生在**同源**：面板记录的服务器地址必须与这个页面的 scheme / host / port 相同，并且是根路径（允许结尾斜杠）。面板退出登录、未勾选「记住密码」、存储记录损坏、或面板登录的是别的服务器（包括同源但带路径前缀的地址）时，页面不会复用面板那份密钥，也不会去读旧的遗留面板密码；此时沿用本页手动输入或插件自己在本机保存的密钥，两者都没有才提示输入。页面不会修改面板的存储，也不会把面板密码复制进插件自己的存储。
 
 ### 命令行
 
@@ -137,6 +139,7 @@ go test ./...                               # 单测（不联网）
 python3 test/abi_smoke.py dist/deepseek-cpa.linux.amd64   # 真实动态库的 ABI 冒烟
 ./scripts/package-release.sh 0.2.0          # 打 release 归档 + checksums
 python3 test/package_check.py               # 校验归档与 registry.json
+node --test test/management_page_test.mjs   # 管理页脚本测试（凭据复用与回退）
 ```
 
 真机验证脚本需要一把真实 DeepSeek key（key 由宿主持有，脚本本身不接触）：
